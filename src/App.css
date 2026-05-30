@@ -1,0 +1,141 @@
+body {
+  margin: 0;
+  font-family: Inter, system-ui, sans-serif;
+  background: #160006;
+  color: white;
+}
+
+.landing-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  background:
+    radial-gradient(circle at top, rgba(244, 199, 107, 0.2), transparent 32%),
+    linear-gradient(180deg, #6f0017 0%, #41000d 45%, #140004 100%);
+}
+
+.landing-content {
+  width: 100%;
+  max-width: 500px;
+  text-align: center;
+  transform: translateY(-45px);
+}
+
+.vault-logo {
+  width: 260px;
+  max-width: 90%;
+  display: block;
+  margin: 0 auto 0;
+  filter: drop-shadow(0 18px 38px rgba(0, 0, 0, 0.55));
+  animation: float 4s ease-in-out infinite;
+}
+
+.logo-mark {
+  display: none;
+}
+
+.landing-content h1 {
+  margin: 0 0 4px;
+  color: #d7ad55;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 72px;
+  font-weight: 500;
+  letter-spacing: 12px;
+  text-transform: uppercase;
+}
+
+.tagline {
+  margin: 4px 0 14px;
+  color: #f4c76b;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 20px;
+  letter-spacing: 2px;
+}
+
+.landing-content p {
+  color: #e6c6a3;
+  font-size: 16px;
+  line-height: 1.45;
+  margin: 0 auto 24px;
+  max-width: 370px;
+}
+
+.auth-actions {
+  width: 100%;
+  max-width: 500px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 24px auto 0;
+}
+
+button {
+  width: 100%;
+  border: none;
+  padding: 18px;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.google-btn {
+  background: #fff7ef;
+  color: #1f1f1f;
+  border: 1.5px solid #c9963f;
+}
+
+.email-btn {
+  background: #fff7ef;
+  color: #1f1f1f;
+  border: 1.5px solid #c9963f;
+}
+
+.login-text {
+  margin-top: 30px !important;
+  margin-bottom: 0 !important;
+  color: #d9b893 !important;
+}
+
+.login-text span {
+  color: #f4c76b;
+  font-weight: 800;
+}
+
+.security-note {
+  margin-top: 30px !important;
+  margin-bottom: 0 !important;
+  color: rgba(244, 199, 107, 0.65) !important;
+  font-size: 14px !important;
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.auth-logo {
+  width: 150px;
+  display: block;
+  margin: 0 auto 18px;
+  filter: drop-shadow(0 14px 28px rgba(0, 0, 0, 0.5));
+}
+
+input {
+  width: 100%;
+  padding: 16px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  border: none;
+  font-size: 16px;
+  background: rgba(255, 255, 255, 0.95);
+  box-sizing: border-box;
+}
