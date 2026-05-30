@@ -1,8 +1,26 @@
 import { useNavigate } from "react-router-dom";
 import vaultLogo from "../assets/vault-logo.png";
+import { useState } from "react";
+import { createUserWithEmailAndPassword } from "firebase/auth";
+import { auth } from "../firebase";
 
 function Register() {
   const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+const [password, setPassword] = useState("");
+const handleRegister = async () => {
+  try {
+    await createUserWithEmailAndPassword(
+      auth,
+      email,
+      password
+    );
+
+    window.location.href = "/dashboard";
+  } catch (error) {
+    console.error(error);
+  }
+};
 
   return (
     <main className="landing-page">
@@ -18,12 +36,24 @@ function Register() {
         <p>Start organizing your important files.</p>
 
         <input placeholder="Full Name" />
-        <input placeholder="Email" />
-        <input placeholder="Password" type="password" />
-
-        <button className="google-btn">
-          Create Account
-        </button>
+<input
+  placeholder="Email"
+  value={email}
+  onChange={(e) => setEmail(e.target.value)}
+  />
+  
+<input
+  placeholder="Password"
+  type="password"
+  value={password}
+  onChange={(e) => setPassword(e.target.value)}
+/>
+        <button
+  className="google-btn"
+  onClick={handleRegister}
+>
+  Create Account
+</button>
 
         <p className="login-text">
           Already have an account?{" "}
