@@ -1,26 +1,24 @@
 import { useNavigate } from "react-router-dom";
 import vaultLogo from "../assets/vault-logo.png";
 import { useState } from "react";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { auth } from "../firebase";
 
 function Register() {
   const navigate = useNavigate();
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
-const [password, setPassword] = useState("");
-const handleRegister = async () => {
-  try {
-    await createUserWithEmailAndPassword(
-      auth,
-      email,
-      password
-    );
+  const [password, setPassword] = useState("");
 
-    window.location.href = "/dashboard";
-  } catch (error) {
-    console.error(error);
-  }
-};
+  const handleRegister = async () => {
+    try {
+      const { user } = await createUserWithEmailAndPassword(auth, email, password);
+      await updateProfile(user, { displayName: fullName });
+      window.location.href = "/dashboard";
+    } catch (error) {
+      console.error(error);
+    }
+  };
 
   return (
     <main className="landing-page">
@@ -35,7 +33,11 @@ const handleRegister = async () => {
 
         <p>Start organizing your important files.</p>
 
-        <input placeholder="Full Name" />
+        <input
+          placeholder="Full Name"
+          value={fullName}
+          onChange={(e) => setFullName(e.target.value)}
+        />
 <input
   placeholder="Email"
   value={email}
