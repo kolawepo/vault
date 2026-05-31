@@ -1,3 +1,5 @@
+import { auth } from "../firebase";
+
 const WORKER_URL = import.meta.env.VITE_WORKER_URL as string;
 
 export type StorageFile = {
@@ -7,19 +9,30 @@ export type StorageFile = {
   lastModified: string | null;
 };
 
+async function authHeaders(): Promise<Record<string, string>> {
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) throw new Error("Not authenticated");
+  return { Authorization: `Bearer ${token}` };
+}
+
 export async function listFiles(): Promise<StorageFile[]> {
-  const res = await fetch(`${WORKER_URL}/files`);
+  const res = await fetch(`${WORKER_URL}/files`, {
+    headers: await authHeaders(),
+  });
   if (!res.ok) throw new Error("Failed to list files");
   return res.json();
 }
 
 export async function uploadFile(file: File): Promise<void> {
-  const key = `${Date.now()}-${file.name}`;
+  const headers = await authHeaders();
 
   const res = await fetch(`${WORKER_URL}/presign/upload`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key, contentType: file.type || "application/octet-stream" }),
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filename: file.name,
+      contentType: file.type || "application/octet-stream",
+    }),
   });
   if (!res.ok) throw new Error("Failed to get upload URL");
 
@@ -35,7 +48,8 @@ export async function uploadFile(file: File): Promise<void> {
 
 export async function getDownloadUrl(key: string): Promise<string> {
   const res = await fetch(
-    `${WORKER_URL}/presign/download/${encodeURIComponent(key)}`
+    `${WORKER_URL}/presign/download/${encodeURIComponent(key)}`,
+    { headers: await authHeaders() }
   );
   if (!res.ok) throw new Error("Failed to get download URL");
   const { url } = await res.json();
@@ -43,9 +57,9 @@ export async function getDownloadUrl(key: string): Promise<string> {
 }
 
 export async function deleteFile(key: string): Promise<void> {
-  const res = await fetch(
-    `${WORKER_URL}/file/${encodeURIComponent(key)}`,
-    { method: "DELETE" }
-  );
+  const res = await fetch(`${WORKER_URL}/file/${encodeURIComponent(key)}`, {
+    method: "DELETE",
+    headers: await authHeaders(),
+  });
   if (!res.ok) throw new Error("Failed to delete file");
 }

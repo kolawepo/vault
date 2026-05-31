@@ -5,12 +5,85 @@ export interface Env {
   AWS_SECRET_ACCESS_KEY: string;
   AWS_REGION: string;
   BUCKET_NAME: string;
+  FIREBASE_PROJECT_ID: string;
 }
+
+// ---------------------------------------------------------------------------
+// Firebase JWT verification
+// ---------------------------------------------------------------------------
+
+type JwkSet = { keys: (JsonWebKey & { kid: string })[] };
+
+let jwksCache: { keys: JwkSet["keys"]; fetchedAt: number } | null = null;
+
+async function getJwks(): Promise<JwkSet["keys"]> {
+  const now = Date.now();
+  if (jwksCache && now - jwksCache.fetchedAt < 3_600_000) return jwksCache.keys;
+  const res = await fetch(
+    "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
+  );
+  const { keys } = (await res.json()) as JwkSet;
+  jwksCache = { keys, fetchedAt: now };
+  return keys;
+}
+
+function b64urlDecode(s: string): Uint8Array {
+  return Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) =>
+    c.charCodeAt(0)
+  );
+}
+
+async function verifyFirebaseToken(
+  token: string,
+  projectId: string
+): Promise<string | null> {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const [rawHeader, rawPayload, rawSig] = parts;
+
+    const header = JSON.parse(atob(rawHeader.replace(/-/g, "+").replace(/_/g, "/")));
+    const payload = JSON.parse(atob(rawPayload.replace(/-/g, "+").replace(/_/g, "/")));
+
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.exp < now) return null;
+    if (payload.aud !== projectId) return null;
+    if (payload.iss !== `https://securetoken.google.com/${projectId}`) return null;
+    if (!payload.sub) return null;
+
+    const keys = await getJwks();
+    const jwk = keys.find((k) => k.kid === header.kid);
+    if (!jwk) return null;
+
+    const publicKey = await crypto.subtle.importKey(
+      "jwk",
+      jwk,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+
+    const valid = await crypto.subtle.verify(
+      "RSASSA-PKCS1-v1_5",
+      publicKey,
+      b64urlDecode(rawSig),
+      new TextEncoder().encode(`${rawHeader}.${rawPayload}`)
+    );
+
+    return valid ? (payload.sub as string) : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
 function json(data: unknown, status = 200) {
@@ -37,19 +110,37 @@ function makeClient(env: Env) {
   });
 }
 
+// Strip the uid/ and timestamp- prefix to get the display name.
+function displayName(key: string): string {
+  return key.replace(/^[^/]+\/\d+-/, "");
+}
+
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: CORS_HEADERS });
     }
 
+    // Authenticate every request.
+    const authHeader = request.headers.get("Authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!token) return json({ error: "Unauthorized" }, 401);
+
+    const uid = await verifyFirebaseToken(token, env.FIREBASE_PROJECT_ID);
+    if (!uid) return json({ error: "Unauthorized" }, 401);
+
     const { pathname } = new URL(request.url);
     const aws = makeClient(env);
 
-    // GET /files — list bucket contents
+    // GET /files — list this user's files
     if (request.method === "GET" && pathname === "/files") {
       const listUrl = new URL(s3BaseUrl(env.BUCKET_NAME, env.AWS_REGION));
       listUrl.searchParams.set("list-type", "2");
+      listUrl.searchParams.set("prefix", `${uid}/`);
 
       const res = await aws.fetch(listUrl.toString());
       if (!res.ok) return json({ error: "Failed to list files" }, 502);
@@ -63,23 +154,20 @@ export default {
         const size = parseInt(block.match(/<Size>(.*?)<\/Size>/)?.[1] ?? "0");
         const lastModified =
           block.match(/<LastModified>(.*?)<\/LastModified>/)?.[1] ?? null;
-        return {
-          key,
-          name: key.replace(/^\d+-/, ""),
-          size,
-          lastModified,
-        };
+        return { key, name: displayName(key), size, lastModified };
       });
 
       return json(files);
     }
 
-    // POST /presign/upload — { key, contentType } → presigned PUT URL (1 hour)
+    // POST /presign/upload — { filename, contentType } → presigned PUT URL
     if (request.method === "POST" && pathname === "/presign/upload") {
-      const { key, contentType } = (await request.json()) as {
-        key: string;
+      const { filename, contentType } = (await request.json()) as {
+        filename: string;
         contentType: string;
       };
+
+      const key = `${uid}/${Date.now()}-${filename}`;
 
       const signed = await aws.sign(
         new Request(s3ObjectUrl(env.BUCKET_NAME, env.AWS_REGION, key), {
@@ -89,13 +177,15 @@ export default {
         { aws: { signQuery: true, expiresIn: 3600 } }
       );
 
-      return json({ url: signed.url });
+      return json({ url: signed.url, key });
     }
 
-    // GET /presign/download/:key — presigned GET URL (15 minutes)
+    // GET /presign/download/:key — presigned GET URL (15 min)
     const downloadMatch = pathname.match(/^\/presign\/download\/(.+)$/);
     if (request.method === "GET" && downloadMatch) {
       const key = decodeURIComponent(downloadMatch[1]);
+
+      if (!key.startsWith(`${uid}/`)) return json({ error: "Forbidden" }, 403);
 
       const signed = await aws.sign(
         new Request(s3ObjectUrl(env.BUCKET_NAME, env.AWS_REGION, key), {
@@ -107,10 +197,12 @@ export default {
       return json({ url: signed.url });
     }
 
-    // DELETE /file/:key — delete an object
+    // DELETE /file/:key
     const deleteMatch = pathname.match(/^\/file\/(.+)$/);
     if (request.method === "DELETE" && deleteMatch) {
       const key = decodeURIComponent(deleteMatch[1]);
+
+      if (!key.startsWith(`${uid}/`)) return json({ error: "Forbidden" }, 403);
 
       const res = await aws.fetch(
         s3ObjectUrl(env.BUCKET_NAME, env.AWS_REGION, key),

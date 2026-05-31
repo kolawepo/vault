@@ -5,6 +5,7 @@ compatibility_date = "2024-09-23"
 [vars]
 AWS_REGION = "us-east-2"
 BUCKET_NAME = "vault-files-kehinde"
+FIREBASE_PROJECT_ID = "vault-82d83"
 
 # Secrets (set via CLI, never commit these):
 # wrangler secret put AWS_ACCESS_KEY_ID
