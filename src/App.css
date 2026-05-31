@@ -421,6 +421,92 @@ input {
   border-radius: 10px;
 }
 
+.file-menu {
+  position: relative;
+}
+
+.file-menu-btn {
+  background: rgba(255, 247, 239, 0.08) !important;
+  color: #f4c76b !important;
+  font-size: 18px;
+  width: 36px;
+  height: 36px;
+  padding: 0 !important;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(244, 199, 107, 0.2) !important;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.file-menu-btn:hover {
+  background: rgba(244, 199, 107, 0.15) !important;
+}
+
+.file-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 100;
+  min-width: 160px;
+  background: #1e0510;
+  border: 1px solid rgba(244, 199, 107, 0.3);
+  border-radius: 14px;
+  padding: 6px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dropdown-item {
+  width: 100% !important;
+  text-align: left !important;
+  padding: 10px 14px !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  color: #f7e7d0 !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  border: none !important;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.dropdown-item:hover {
+  background: rgba(244, 199, 107, 0.1) !important;
+}
+
+.delete-item {
+  color: #e07070 !important;
+}
+
+.delete-item:hover {
+  background: rgba(220, 60, 60, 0.12) !important;
+}
+
+.delete-confirm {
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.delete-confirm span {
+  color: #f7e7d0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.delete-confirm-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.delete-yes {
+  color: #e07070 !important;
+}
+
 @media (max-width: 1000px) {
   .vault-dashboard {
     grid-template-columns: 1fr;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { auth } from "../firebase";
-import { listFiles, uploadFile, type StorageFile } from "../api/storage";
+import { listFiles, uploadFile, deleteFile, getDownloadUrl, type StorageFile } from "../api/storage";
 import vaultLogo from "../assets/vault-logo.png";
 
 function Dashboard() {
@@ -8,6 +8,15 @@ function Dashboard() {
   const [uploadedFiles, setUploadedFiles] = useState<StorageFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState("");
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!openMenu) return;
+    const close = () => { setOpenMenu(null); setConfirmDelete(null); };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [openMenu]);
 
   const loadFiles = async () => {
     try {
@@ -53,6 +62,36 @@ function Dashboard() {
       setMessage("Upload failed.");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleDownload = async (file: StorageFile) => {
+    setOpenMenu(null);
+    try {
+      const url = await getDownloadUrl(file.key);
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = file.name;
+      a.click();
+      URL.revokeObjectURL(objUrl);
+    } catch (err) {
+      console.error(err);
+      setMessage("Download failed.");
+    }
+  };
+
+  const handleDelete = async (key: string) => {
+    setOpenMenu(null);
+    setConfirmDelete(null);
+    try {
+      await deleteFile(key);
+      await loadFiles();
+    } catch (err) {
+      console.error(err);
+      setMessage("Delete failed.");
     }
   };
 
@@ -163,7 +202,42 @@ function Dashboard() {
                   </div>
                   <p>{getFileType(file.name)}</p>
                   <p>{formatFileSize(file.size)}</p>
-                  <button>⋯</button>
+                  <div className="file-menu">
+                    <button
+                      className="file-menu-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirmDelete(null);
+                        setOpenMenu(openMenu === file.key ? null : file.key);
+                      }}
+                    >
+                      ⋯
+                    </button>
+                    {openMenu === file.key && (
+                      <div className="file-dropdown" onClick={(e) => e.stopPropagation()}>
+                        <button className="dropdown-item" onClick={() => handleDownload(file)}>
+                          ↓ Download
+                        </button>
+                        {confirmDelete === file.key ? (
+                          <div className="delete-confirm">
+                            <span>Delete file?</span>
+                            <div className="delete-confirm-actions">
+                              <button className="dropdown-item delete-yes" onClick={() => handleDelete(file.key)}>
+                                Yes, delete
+                              </button>
+                              <button className="dropdown-item" onClick={() => setConfirmDelete(null)}>
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button className="dropdown-item delete-item" onClick={() => setConfirmDelete(file.key)}>
+                            ✕ Delete
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
