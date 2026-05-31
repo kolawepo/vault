@@ -1,64 +1,37 @@
 import { useEffect, useState } from "react";
-import { supabase } from "../supabase";
+import { auth } from "../firebase";
+import { listFiles, uploadFile, type StorageFile } from "../api/storage";
 import vaultLogo from "../assets/vault-logo.png";
-
-type VaultFile = {
-  name: string;
-  created_at: string | null;
-  updated_at?: string | null;
-  last_accessed_at?: string | null;
-  id?: string | null;
-  metadata?: {
-    size?: number;
-    mimetype?: string;
-  } | null;
-};
 
 function Dashboard() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploadedFiles, setUploadedFiles] = useState<VaultFile[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<StorageFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState("");
 
-const loadFiles = async () => {
-  const { data, error } = await supabase.storage
-    .from("vault-files")
-    .list();
-
-  console.log("FILES FROM SUPABASE:", data);
-  console.log("SUPABASE ERROR:", error);
-
-  if (error) {
-    console.error(error);
-    setMessage("Could not load files.");
-    return;
-  }
-
-  setUploadedFiles(data || []);
-};
-
-
+  const loadFiles = async () => {
+    try {
+      const files = await listFiles();
+      setUploadedFiles(files);
+    } catch (err) {
+      console.error(err);
+      setMessage("Could not load files.");
+    }
+  };
 
   useEffect(() => {
     loadFiles();
   }, []);
 
-  const formatFileSize = (size?: number) => {
+  const formatFileSize = (size: number) => {
     if (!size) return "Unknown";
-
     if (size < 1024) return `${size} B`;
     if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-
     return `${(size / (1024 * 1024)).toFixed(2)} MB`;
   };
 
   const getFileType = (fileName: string) => {
-    const extension = fileName.split(".").pop()?.toUpperCase();
-    return extension || "FILE";
-  };
-
-  const cleanFileName = (fileName: string) => {
-    return fileName.replace(/^\d+-/, "");
+    return fileName.split(".").pop()?.toUpperCase() || "FILE";
   };
 
   const handleUpload = async () => {
@@ -70,23 +43,20 @@ const loadFiles = async () => {
     setUploading(true);
     setMessage("");
 
-    const filePath = `${Date.now()}-${selectedFile.name}`;
-
-    const { error } = await supabase.storage
-      .from("vault-files")
-      .upload(filePath, selectedFile);
-
-    if (error) {
-      console.error(error);
-      setMessage("Upload failed. Check Supabase policies.");
-    } else {
+    try {
+      await uploadFile(selectedFile);
       setSelectedFile(null);
       setMessage("File uploaded successfully.");
       await loadFiles();
+    } catch (err) {
+      console.error(err);
+      setMessage("Upload failed.");
+    } finally {
+      setUploading(false);
     }
-
-    setUploading(false);
   };
+
+  const totalSize = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
 
   return (
     <main className="vault-dashboard">
@@ -107,9 +77,15 @@ const loadFiles = async () => {
         </nav>
 
         <div className="sidebar-profile">
-          <div className="profile-circle">KO</div>
+          <div className="profile-circle">
+            {auth.currentUser?.displayName
+              ?.split(" ")
+              .map((n) => n[0])
+              .join("")
+              .slice(0, 2) ?? "?"}
+          </div>
           <div>
-            <strong>Kehinde Olawepo</strong>
+            <strong>{auth.currentUser?.displayName ?? "Vault User"}</strong>
             <p>Vault Free</p>
           </div>
         </div>
@@ -118,7 +94,10 @@ const loadFiles = async () => {
       <section className="vault-main">
         <header className="vault-topbar">
           <div>
-            <h2>Welcome back, Kehinde 👋</h2>
+            <h2>
+              Welcome back,{" "}
+              {auth.currentUser?.displayName?.split(" ")[0] ?? "there"} 👋
+            </h2>
             <p>All your important files, secured in one place.</p>
           </div>
 
@@ -147,20 +126,12 @@ const loadFiles = async () => {
             {selectedFile && (
               <p className="upload-status">Selected: {selectedFile.name}</p>
             )}
-
             {message && <p className="upload-status">{message}</p>}
           </div>
 
           <div className="vault-card stat-card">
             <h3>Storage Used</h3>
-            <h2>
-              {formatFileSize(
-                uploadedFiles.reduce(
-                  (total, file) => total + (file.metadata?.size || 0),
-                  0
-                )
-              )}
-            </h2>
+            <h2>{formatFileSize(totalSize)}</h2>
             <p>Files uploaded to your vault.</p>
             <div className="progress-track">
               <div className="progress-fill"></div>
@@ -185,14 +156,13 @@ const loadFiles = async () => {
           ) : (
             <div className="files-table">
               {uploadedFiles.map((file) => (
-                <div className="file-row" key={file.name}>
+                <div className="file-row" key={file.key}>
                   <div className="file-name">
                     <span>📄</span>
-                    <strong>{cleanFileName(file.name)}</strong>
+                    <strong>{file.name}</strong>
                   </div>
-
                   <p>{getFileType(file.name)}</p>
-                  <p>{formatFileSize(file.metadata?.size)}</p>
+                  <p>{formatFileSize(file.size)}</p>
                   <button>⋯</button>
                 </div>
               ))}
