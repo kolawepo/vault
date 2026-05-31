@@ -6,7 +6,10 @@ export interface Env {
   AWS_REGION: string;
   BUCKET_NAME: string;
   FIREBASE_PROJECT_ID: string;
+  SHARE_TOKENS: KVNamespace;
 }
+
+type ShareRecord = { uid: string; key: string; filename: string };
 
 // ---------------------------------------------------------------------------
 // Firebase JWT verification
@@ -115,6 +118,12 @@ function displayName(key: string): string {
   return key.replace(/^[^/]+\/\d+-/, "");
 }
 
+function generateToken(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -125,16 +134,35 @@ export default {
       return new Response(null, { headers: CORS_HEADERS });
     }
 
-    // Authenticate every request.
+    const { pathname } = new URL(request.url);
+    const aws = makeClient(env);
+
+    // GET /share/:token — public, no auth required
+    const shareMatch = pathname.match(/^\/share\/([a-f0-9]{32})$/);
+    if (request.method === "GET" && shareMatch) {
+      const shareToken = shareMatch[1];
+      const raw = await env.SHARE_TOKENS.get(shareToken);
+      if (!raw) return json({ error: "Link not found or expired" }, 404);
+
+      const { key, filename } = JSON.parse(raw) as ShareRecord;
+
+      const signed = await aws.sign(
+        new Request(s3ObjectUrl(env.BUCKET_NAME, env.AWS_REGION, key), {
+          method: "GET",
+        }),
+        { aws: { signQuery: true, expiresIn: 900 } }
+      );
+
+      return Response.redirect(signed.url, 302);
+    }
+
+    // All other routes require a valid Firebase token.
     const authHeader = request.headers.get("Authorization") ?? "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
     if (!token) return json({ error: "Unauthorized" }, 401);
 
     const uid = await verifyFirebaseToken(token, env.FIREBASE_PROJECT_ID);
     if (!uid) return json({ error: "Unauthorized" }, 401);
-
-    const { pathname } = new URL(request.url);
-    const aws = makeClient(env);
 
     // GET /files — list this user's files
     if (request.method === "GET" && pathname === "/files") {
@@ -211,6 +239,21 @@ export default {
 
       if (res.status === 204 || res.status === 200) return json({ ok: true });
       return json({ error: "Delete failed" }, 502);
+    }
+
+    // POST /share — { key } → create share token (auth required)
+    if (request.method === "POST" && pathname === "/share") {
+      const { key } = (await request.json()) as { key: string };
+
+      if (!key.startsWith(`${uid}/`)) return json({ error: "Forbidden" }, 403);
+
+      const token = generateToken();
+      const filename = displayName(key);
+      const record: ShareRecord = { uid, key, filename };
+      await env.SHARE_TOKENS.put(token, JSON.stringify(record));
+
+      const shareUrl = `${new URL(request.url).origin}/share/${token}`;
+      return json({ url: shareUrl, token });
     }
 
     return json({ error: "Not found" }, 404);

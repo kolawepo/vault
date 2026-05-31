@@ -7,6 +7,10 @@ AWS_REGION = "us-east-2"
 BUCKET_NAME = "vault-files-kehinde"
 FIREBASE_PROJECT_ID = "vault-82d83"
 
+[[kv_namespaces]]
+binding = "SHARE_TOKENS"
+id = "b1103fc142fe4c17ae5fea87e64e3d5d"
+
 # Secrets (set via CLI, never commit these):
 # wrangler secret put AWS_ACCESS_KEY_ID
 # wrangler secret put AWS_SECRET_ACCESS_KEY
