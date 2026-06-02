@@ -7,9 +7,11 @@ export interface Env {
   BUCKET_NAME: string;
   FIREBASE_PROJECT_ID: string;
   SHARE_TOKENS: KVNamespace;
+  ANTHROPIC_API_KEY: string;
 }
 
 type ShareRecord = { uid: string; key: string; filename: string };
+type ChatMessage = { role: "user" | "assistant"; content: string };
 
 // ---------------------------------------------------------------------------
 // Firebase JWT verification
@@ -122,6 +124,44 @@ function generateToken(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+type AnthropicMediaType =
+  | "application/pdf"
+  | "text/plain"
+  | "text/html"
+  | "text/csv"
+  | "image/jpeg"
+  | "image/png"
+  | "image/gif"
+  | "image/webp";
+
+function mediaTypeFromKey(key: string): AnthropicMediaType | null {
+  const ext = key.split(".").pop()?.toLowerCase();
+  const map: Record<string, AnthropicMediaType> = {
+    pdf: "application/pdf",
+    txt: "text/plain",
+    md: "text/plain",
+    html: "text/html",
+    htm: "text/html",
+    csv: "text/csv",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+  };
+  return ext ? (map[ext] ?? null) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +294,84 @@ export default {
 
       const shareUrl = `${new URL(request.url).origin}/share/${token}`;
       return json({ url: shareUrl, token });
+    }
+
+    // POST /chat — { key, message, history } → { reply }
+    if (request.method === "POST" && pathname === "/chat") {
+      const { key, message, history } = (await request.json()) as {
+        key: string;
+        message: string;
+        history: ChatMessage[];
+      };
+
+      if (!key.startsWith(`${uid}/`)) return json({ error: "Forbidden" }, 403);
+
+      const mediaType = mediaTypeFromKey(key);
+      if (!mediaType) {
+        return json(
+          { error: "This file type isn't supported for AI chat. Try a PDF, text file, or image." },
+          422
+        );
+      }
+
+      const s3Res = await aws.fetch(s3ObjectUrl(env.BUCKET_NAME, env.AWS_REGION, key));
+      if (!s3Res.ok) return json({ error: "Could not fetch file" }, 502);
+
+      const fileBuffer = await s3Res.arrayBuffer();
+      const base64Data = arrayBufferToBase64(fileBuffer);
+
+      const isImage = mediaType.startsWith("image/");
+      const contentBlock = isImage
+        ? { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } }
+        : { type: "document", source: { type: "base64", media_type: mediaType, data: base64Data } };
+
+      type AnthropicMessage = { role: "user" | "assistant"; content: unknown };
+      const messages: AnthropicMessage[] = [];
+
+      if (history.length === 0) {
+        messages.push({
+          role: "user",
+          content: [contentBlock, { type: "text", text: message }],
+        });
+      } else {
+        messages.push({
+          role: "user",
+          content: [contentBlock, { type: "text", text: history[0].content }],
+        });
+        for (const turn of history.slice(1)) {
+          messages.push({ role: turn.role, content: turn.content });
+        }
+        messages.push({ role: "user", content: message });
+      }
+
+      const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": env.ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-opus-4-8",
+          max_tokens: 1024,
+          messages,
+        }),
+      });
+
+      const anthropicData = (await anthropicRes.json()) as {
+        content?: { type: string; text: string }[];
+        error?: { message: string };
+      };
+
+      if (!anthropicRes.ok) {
+        return json(
+          { error: "AI error", detail: anthropicData.error?.message },
+          anthropicRes.status
+        );
+      }
+
+      const reply = anthropicData.content?.find((b) => b.type === "text")?.text ?? "";
+      return json({ reply });
     }
 
     return json({ error: "Not found" }, 404);

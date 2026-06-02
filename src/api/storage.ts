@@ -63,3 +63,34 @@ export async function deleteFile(key: string): Promise<void> {
   });
   if (!res.ok) throw new Error("Failed to delete file");
 }
+
+export async function createShareLink(key: string): Promise<string> {
+  const res = await fetch(`${WORKER_URL}/share`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+  if (!res.ok) throw new Error("Failed to create share link");
+  const { url } = await res.json();
+  return url;
+}
+
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+
+export async function chatWithDocument(
+  key: string,
+  message: string,
+  history: ChatMessage[]
+): Promise<string> {
+  const res = await fetch(`${WORKER_URL}/chat`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ key, message, history }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const d = data as { error: string; detail?: string; status?: number };
+    throw new Error(`${d.error}${d.detail ? ` — ${d.detail}` : ""}`);
+  }
+  return (data as { reply: string }).reply;
+}
