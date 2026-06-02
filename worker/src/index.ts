@@ -7,7 +7,7 @@ export interface Env {
   BUCKET_NAME: string;
   FIREBASE_PROJECT_ID: string;
   SHARE_TOKENS: KVNamespace;
-  ANTHROPIC_API_KEY: string;
+  GEMINI_API_KEY: string;
 }
 
 type ShareRecord = { uid: string; key: string; filename: string };
@@ -136,7 +136,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
-type AnthropicMediaType =
+type GeminiMimeType =
   | "application/pdf"
   | "text/plain"
   | "text/html"
@@ -146,7 +146,7 @@ type AnthropicMediaType =
   | "image/gif"
   | "image/webp";
 
-function mediaTypeFromKey(key: string): AnthropicMediaType | null {
+function mediaTypeFromKey(key: string): GeminiMimeType | null {
   const ext = key.split(".").pop()?.toLowerCase();
   const map: Record<string, AnthropicMediaType> = {
     pdf: "application/pdf",
@@ -320,57 +320,42 @@ export default {
       const fileBuffer = await s3Res.arrayBuffer();
       const base64Data = arrayBufferToBase64(fileBuffer);
 
-      const isImage = mediaType.startsWith("image/");
-      const contentBlock = isImage
-        ? { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } }
-        : { type: "document", source: { type: "base64", media_type: mediaType, data: base64Data } };
+      type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
+      type GeminiContent = { role: "user" | "model"; parts: GeminiPart[] };
 
-      type AnthropicMessage = { role: "user" | "assistant"; content: unknown };
-      const messages: AnthropicMessage[] = [];
+      const filepart: GeminiPart = { inlineData: { mimeType: mediaType, data: base64Data } };
+      const contents: GeminiContent[] = [];
 
       if (history.length === 0) {
-        messages.push({
-          role: "user",
-          content: [contentBlock, { type: "text", text: message }],
-        });
+        contents.push({ role: "user", parts: [filepart, { text: message }] });
       } else {
-        messages.push({
-          role: "user",
-          content: [contentBlock, { type: "text", text: history[0].content }],
-        });
+        contents.push({ role: "user", parts: [filepart, { text: history[0].content }] });
         for (const turn of history.slice(1)) {
-          messages.push({ role: turn.role, content: turn.content });
+          contents.push({
+            role: turn.role === "assistant" ? "model" : "user",
+            parts: [{ text: turn.content }],
+          });
         }
-        messages.push({ role: "user", content: message });
+        contents.push({ role: "user", parts: [{ text: message }] });
       }
 
-      const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`;
+      const geminiRes = await fetch(geminiUrl, {
         method: "POST",
-        headers: {
-          "x-api-key": env.ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-opus-4-8",
-          max_tokens: 1024,
-          messages,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents }),
       });
 
-      const anthropicData = (await anthropicRes.json()) as {
-        content?: { type: string; text: string }[];
+      const geminiData = (await geminiRes.json()) as {
+        candidates?: { content: { parts: { text: string }[] } }[];
         error?: { message: string };
       };
 
-      if (!anthropicRes.ok) {
-        return json(
-          { error: "AI error", detail: anthropicData.error?.message },
-          anthropicRes.status
-        );
+      if (!geminiRes.ok) {
+        return json({ error: "AI error", detail: geminiData.error?.message }, geminiRes.status);
       }
 
-      const reply = anthropicData.content?.find((b) => b.type === "text")?.text ?? "";
+      const reply = geminiData.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
       return json({ reply });
     }
 

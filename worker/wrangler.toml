@@ -14,3 +14,4 @@ id = "b1103fc142fe4c17ae5fea87e64e3d5d"
 # Secrets (set via CLI, never commit these):
 # wrangler secret put AWS_ACCESS_KEY_ID
 # wrangler secret put AWS_SECRET_ACCESS_KEY
+# wrangler secret put GEMINI_API_KEY
