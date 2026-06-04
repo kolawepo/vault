@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { auth } from "../firebase";
 import { listFiles, uploadFile, deleteFile, getDownloadUrl, type StorageFile } from "../api/storage";
 import vaultLogo from "../assets/vault-logo.png";
+import DocumentChat from "../components/DocumentChat";
 
 function Dashboard() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -10,6 +11,7 @@ function Dashboard() {
   const [message, setMessage] = useState("");
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [chatFile, setChatFile] = useState<StorageFile | null>(null);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -98,6 +100,7 @@ function Dashboard() {
   const totalSize = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
 
   return (
+    <>
     <main className="vault-dashboard">
       <aside className="vault-sidebar">
         <div className="sidebar-logo">
@@ -202,6 +205,13 @@ function Dashboard() {
                   </div>
                   <p>{getFileType(file.name)}</p>
                   <p>{formatFileSize(file.size)}</p>
+                  <button
+                    className="file-chat-btn"
+                    onClick={(e) => { e.stopPropagation(); setChatFile(file); }}
+                    title="Chat with this file"
+                  >
+                    ✦ Ask AI
+                  </button>
                   <div className="file-menu">
                     <button
                       className="file-menu-btn"
@@ -245,6 +255,15 @@ function Dashboard() {
         </section>
       </section>
     </main>
+
+    {chatFile && (
+      <DocumentChat
+        fileKey={chatFile.key}
+        fileName={chatFile.name}
+        onClose={() => setChatFile(null)}
+      />
+    )}
+    </>
   );
 }
 

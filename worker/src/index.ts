@@ -148,7 +148,7 @@ type GeminiMimeType =
 
 function mediaTypeFromKey(key: string): GeminiMimeType | null {
   const ext = key.split(".").pop()?.toLowerCase();
-  const map: Record<string, AnthropicMediaType> = {
+  const map: Record<string, GeminiMimeType> = {
     pdf: "application/pdf",
     txt: "text/plain",
     md: "text/plain",
@@ -339,7 +339,7 @@ export default {
         contents.push({ role: "user", parts: [{ text: message }] });
       }
 
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`;
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${env.GEMINI_API_KEY}`;
       const geminiRes = await fetch(geminiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
