@@ -790,3 +790,71 @@ input {
   opacity: 0.35;
   cursor: not-allowed;
 }
+
+/* ── Name prompt modal ── */
+.name-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 8, 18, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.name-modal {
+  background: #1a1525;
+  border: 1px solid rgba(215, 173, 85, 0.2);
+  border-radius: 12px;
+  padding: 36px 32px;
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.name-modal h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #f0e0e6;
+}
+
+.name-modal p {
+  margin: 0;
+  font-size: 14px;
+  color: #9a7a8a;
+}
+
+.name-modal-input {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(215, 173, 85, 0.25);
+  background: rgba(255,255,255,0.04);
+  color: #f0e0e6;
+  font-size: 15px;
+  outline: none;
+  margin-top: 4px;
+}
+
+.name-modal-input:focus {
+  border-color: #d7ad55;
+}
+
+.name-modal-btn {
+  margin-top: 4px;
+  padding: 10px;
+  border-radius: 8px;
+  border: none;
+  background: #d7ad55;
+  color: #0a0812;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.name-modal-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

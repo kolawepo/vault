@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { type User, updateProfile } from "firebase/auth";
 import { auth } from "../firebase";
 import { listFiles, uploadFile, deleteFile, getDownloadUrl, type StorageFile } from "../api/storage";
 import vaultLogo from "../assets/vault-logo.png";
@@ -6,7 +7,7 @@ import DocumentChat from "../components/DocumentChat";
 
 type View = "dashboard" | "files" | "recent" | "storage";
 
-function Dashboard() {
+function Dashboard({ user }: { user: User }) {
   const [activeView, setActiveView] = useState<View>("dashboard");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<StorageFile[]>([]);
@@ -15,6 +16,21 @@ function Dashboard() {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [chatFile, setChatFile] = useState<StorageFile | null>(null);
+  const [displayName, setDisplayName] = useState(user.displayName);
+  const [nameInput, setNameInput] = useState("");
+  const [nameSaving, setNameSaving] = useState(false);
+
+  const saveDisplayName = async () => {
+    const trimmed = nameInput.trim();
+    if (!trimmed || nameSaving) return;
+    setNameSaving(true);
+    try {
+      await updateProfile(auth.currentUser!, { displayName: trimmed });
+      setDisplayName(trimmed);
+    } finally {
+      setNameSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (!openMenu) return;
@@ -118,7 +134,7 @@ function Dashboard() {
 
   const topbarText: Record<View, { heading: string; sub: string }> = {
     dashboard: {
-      heading: `Welcome back, ${auth.currentUser?.displayName?.split(" ")[0] ?? "there"} 👋`,
+      heading: `Welcome back, ${displayName?.split(" ")[0] ?? user.email?.split("@")[0] ?? "there"} 👋`,
       sub: "All your important files, secured in one place.",
     },
     files: {
@@ -207,14 +223,14 @@ function Dashboard() {
 
         <div className="sidebar-profile">
           <div className="profile-circle">
-            {auth.currentUser?.displayName
+            {displayName
               ?.split(" ")
               .map((n) => n[0])
               .join("")
               .slice(0, 2) ?? "?"}
           </div>
           <div>
-            <strong>{auth.currentUser?.displayName ?? "Vault User"}</strong>
+            <strong>{displayName ?? "Vault User"}</strong>
             <p>Vault Free</p>
           </div>
         </div>
@@ -373,6 +389,30 @@ function Dashboard() {
         fileName={chatFile.name}
         onClose={() => setChatFile(null)}
       />
+    )}
+
+    {!displayName && (
+      <div className="name-modal-overlay">
+        <div className="name-modal">
+          <h2>What's your name?</h2>
+          <p>We'll use this to personalize your experience.</p>
+          <input
+            className="name-modal-input"
+            placeholder="Full name"
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && saveDisplayName()}
+            autoFocus
+          />
+          <button
+            className="name-modal-btn"
+            onClick={saveDisplayName}
+            disabled={!nameInput.trim() || nameSaving}
+          >
+            {nameSaving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
     )}
     </>
   );
