@@ -11,6 +11,10 @@ FIREBASE_PROJECT_ID = "vault-82d83"
 binding = "SHARE_TOKENS"
 id = "b1103fc142fe4c17ae5fea87e64e3d5d"
 
+[[vectorize]]
+binding = "VAULT_EMBEDDINGS"
+index_name = "vault-embeddings"
+
 # Secrets (set via CLI, never commit these):
 # wrangler secret put AWS_ACCESS_KEY_ID
 # wrangler secret put AWS_SECRET_ACCESS_KEY

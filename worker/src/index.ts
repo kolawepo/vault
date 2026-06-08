@@ -8,6 +8,7 @@ export interface Env {
   FIREBASE_PROJECT_ID: string;
   SHARE_TOKENS: KVNamespace;
   OPENAI_API_KEY: string;
+  VAULT_EMBEDDINGS: VectorizeIndex;
 }
 
 type ShareRecord = { uid: string; key: string; filename: string };
@@ -167,6 +168,37 @@ function mediaTypeFromKey(key: string): GeminiMimeType | null {
 }
 
 // ---------------------------------------------------------------------------
+// RAG helpers
+// ---------------------------------------------------------------------------
+
+function chunkText(text: string, maxChars = 800, overlap = 100): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    chunks.push(text.slice(start, start + maxChars));
+    start += maxChars - overlap;
+  }
+  return chunks.filter((c) => c.trim().length > 30).slice(0, 100);
+}
+
+async function embedText(text: string, apiKey: string): Promise<number[]> {
+  const res = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ input: text.slice(0, 8192), model: "text-embedding-3-small" }),
+  });
+  const data = (await res.json()) as { data: [{ embedding: number[] }]; error?: { message: string } };
+  if (!res.ok) throw new Error(data.error?.message ?? "Embedding failed");
+  return data.data[0].embedding;
+}
+
+async function vecId(uid: string, key: string, idx: number): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${uid}/${key}`));
+  const hex = Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 24);
+  return `${hex}_${idx}`;
+}
+
+// ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
@@ -280,7 +312,16 @@ export default {
         { method: "DELETE" }
       );
 
-      if (res.status === 204 || res.status === 200) return json({ ok: true });
+      if (res.status === 204 || res.status === 200) {
+        const countStr = await env.SHARE_TOKENS.get(`idx_${key}`);
+        if (countStr) {
+          const count = parseInt(countStr);
+          const ids = await Promise.all(Array.from({ length: count }, (_, i) => vecId(uid, key, i)));
+          env.VAULT_EMBEDDINGS.deleteByIds(ids).catch(() => {});
+          env.SHARE_TOKENS.delete(`idx_${key}`).catch(() => {});
+        }
+        return json({ ok: true });
+      }
       return json({ error: "Delete failed" }, 502);
     }
 
@@ -418,6 +459,148 @@ export default {
 
       const reply = openaiData.choices?.[0]?.message?.content ?? "";
       return json({ reply });
+    }
+
+    // POST /index — { key } → extract text, chunk, embed, upsert to Vectorize
+    if (request.method === "POST" && pathname === "/index") {
+      if (!env.OPENAI_API_KEY) return json({ error: "AI features not configured." }, 503);
+
+      const { key } = (await request.json()) as { key: string };
+      if (!key.startsWith(`${uid}/`)) return json({ error: "Forbidden" }, 403);
+
+      const mediaType = mediaTypeFromKey(key);
+      if (!mediaType) return json({ indexed: 0 });
+
+      const s3Res = await aws.fetch(s3ObjectUrl(env.BUCKET_NAME, env.AWS_REGION, key));
+      if (!s3Res.ok) return json({ error: "Could not fetch file." }, 502);
+
+      const fileBuffer = await s3Res.arrayBuffer();
+      if (fileBuffer.byteLength > MAX_FILE_BYTES) return json({ error: "File too large to index." }, 413);
+
+      let text = "";
+
+      if (mediaType.startsWith("text/")) {
+        text = new TextDecoder().decode(fileBuffer);
+      } else if (mediaType === "application/pdf") {
+        const form = new FormData();
+        form.append("file", new Blob([fileBuffer], { type: "application/pdf" }), displayName(key));
+        form.append("purpose", "user_data");
+
+        const uploadRes = await fetch("https://api.openai.com/v1/files", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+          body: form,
+        });
+
+        if (uploadRes.ok) {
+          const { id: fileId } = (await uploadRes.json()) as { id: string };
+
+          const extractRes = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: [{
+                role: "user",
+                content: [
+                  { type: "file", file: { file_id: fileId } },
+                  { type: "text", text: "Extract all text content from this document. Return only the text, preserving paragraph breaks. No commentary." },
+                ],
+              }],
+            }),
+          });
+
+          if (extractRes.ok) {
+            const d = (await extractRes.json()) as { choices?: { message: { content: string } }[] };
+            text = d.choices?.[0]?.message?.content ?? "";
+          }
+
+          fetch(`https://api.openai.com/v1/files/${fileId}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+          }).catch(() => {});
+        }
+      }
+      // images: text stays "" → skip indexing
+
+      if (!text.trim()) return json({ indexed: 0 });
+
+      const chunks = chunkText(text);
+      const fname = displayName(key);
+
+      // Delete old vectors for this key (handles re-uploads)
+      const oldCountStr = await env.SHARE_TOKENS.get(`idx_${key}`);
+      if (oldCountStr) {
+        const oldCount = parseInt(oldCountStr);
+        const oldIds = await Promise.all(Array.from({ length: oldCount }, (_, i) => vecId(uid, key, i)));
+        await env.VAULT_EMBEDDINGS.deleteByIds(oldIds);
+      }
+
+      const vectors = await Promise.all(
+        chunks.map(async (chunk, i) => ({
+          id: await vecId(uid, key, i),
+          values: await embedText(chunk, env.OPENAI_API_KEY),
+          metadata: { uid, key, fileName: fname, text: chunk },
+        }))
+      );
+
+      await env.VAULT_EMBEDDINGS.upsert(vectors);
+      await env.SHARE_TOKENS.put(`idx_${key}`, String(chunks.length));
+
+      return json({ indexed: chunks.length });
+    }
+
+    // POST /search — { query } → { answer, sources }
+    if (request.method === "POST" && pathname === "/search") {
+      if (!env.OPENAI_API_KEY) return json({ error: "AI features not configured." }, 503);
+
+      const { query } = (await request.json()) as { query: string };
+      if (!query?.trim()) return json({ error: "Query is required." }, 400);
+
+      const queryEmbedding = await embedText(query, env.OPENAI_API_KEY);
+
+      const results = await env.VAULT_EMBEDDINGS.query(queryEmbedding, {
+        topK: 6,
+        filter: { uid },
+        returnMetadata: "all",
+      });
+
+      type ChunkMeta = { uid: string; key: string; fileName: string; text: string };
+
+      if (!results.matches?.length) {
+        return json({ answer: "I couldn't find any relevant content in your documents for that question.", sources: [] });
+      }
+
+      const chunks = results.matches.map((m) => m.metadata as ChunkMeta);
+      const context = chunks.map((c, i) => `[${i + 1}] From "${c.fileName}":\n${c.text}`).join("\n\n");
+      const sources = [...new Map(chunks.map((c) => [c.key, { key: c.key, fileName: c.fileName }])).values()];
+
+      const answerRes = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content: "You are a helpful assistant. Answer the user's question using only the provided document excerpts. Cite which document(s) your answer comes from. If the answer isn't in the documents, say so clearly.",
+            },
+            { role: "user", content: `Document excerpts:\n\n${context}\n\nQuestion: ${query}` },
+          ],
+        }),
+      });
+
+      const answerData = (await answerRes.json()) as {
+        choices?: { message: { content: string } }[];
+        error?: { message: string };
+      };
+
+      if (!answerRes.ok) {
+        return json({ error: answerData.error?.message ?? "AI service error." }, answerRes.status);
+      }
+
+      const answer = answerData.choices?.[0]?.message?.content ?? "";
+      return json({ answer, sources });
     }
 
     return json({ error: "Not found" }, 404);

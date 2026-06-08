@@ -36,7 +36,7 @@ export async function uploadFile(file: File): Promise<void> {
   });
   if (!res.ok) throw new Error("Failed to get upload URL");
 
-  const { url } = await res.json();
+  const { url, key } = (await res.json()) as { url: string; key: string };
 
   const upload = await fetch(url, {
     method: "PUT",
@@ -44,6 +44,40 @@ export async function uploadFile(file: File): Promise<void> {
     body: file,
   });
   if (!upload.ok) throw new Error("Upload to S3 failed");
+
+  // Fire-and-forget: index for RAG search (don't block the upload response)
+  indexDocument(key).catch(console.error);
+}
+
+async function indexDocument(key: string): Promise<void> {
+  const res = await fetch(`${WORKER_URL}/index`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+  if (!res.ok) {
+    const d = (await res.json()) as { error?: string };
+    throw new Error(d.error ?? "Indexing failed");
+  }
+}
+
+export type SearchResult = {
+  answer: string;
+  sources: { key: string; fileName: string }[];
+};
+
+export async function searchDocuments(query: string): Promise<SearchResult> {
+  const res = await fetch(`${WORKER_URL}/search`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const d = data as { error: string };
+    throw new Error(d.error ?? "Search failed");
+  }
+  return data as SearchResult;
 }
 
 export async function getDownloadUrl(key: string): Promise<string> {

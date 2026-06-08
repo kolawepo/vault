@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { type User, updateProfile } from "firebase/auth";
 import { auth } from "../firebase";
-import { listFiles, uploadFile, deleteFile, getDownloadUrl, type StorageFile } from "../api/storage";
+import { listFiles, uploadFile, deleteFile, getDownloadUrl, searchDocuments, type StorageFile, type SearchResult } from "../api/storage";
 import vaultLogo from "../assets/vault-logo.png";
 import DocumentChat from "../components/DocumentChat";
 
-type View = "dashboard" | "files" | "recent" | "storage";
+type View = "dashboard" | "files" | "recent" | "storage" | "search";
 
 function Dashboard({ user }: { user: User }) {
   const [activeView, setActiveView] = useState<View>("dashboard");
@@ -19,6 +19,10 @@ function Dashboard({ user }: { user: User }) {
   const [displayName, setDisplayName] = useState(user.displayName);
   const [nameInput, setNameInput] = useState("");
   const [nameSaving, setNameSaving] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResult, setSearchResult] = useState<SearchResult | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState("");
 
   const saveDisplayName = async () => {
     const trimmed = nameInput.trim();
@@ -29,6 +33,22 @@ function Dashboard({ user }: { user: User }) {
       setDisplayName(trimmed);
     } finally {
       setNameSaving(false);
+    }
+  };
+
+  const runSearch = async () => {
+    const q = searchQuery.trim();
+    if (!q || searchLoading) return;
+    setSearchLoading(true);
+    setSearchResult(null);
+    setSearchError("");
+    try {
+      const result = await searchDocuments(q);
+      setSearchResult(result);
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : "Search failed.");
+    } finally {
+      setSearchLoading(false);
     }
   };
 
@@ -145,6 +165,10 @@ function Dashboard({ user }: { user: User }) {
       heading: "Recent",
       sub: `${recentFiles.length} file${recentFiles.length !== 1 ? "s" : ""} uploaded in the last 7 days.`,
     },
+    search: {
+      heading: "Search",
+      sub: "Ask a question — search across all your uploaded documents.",
+    },
     storage: {
       heading: "Storage",
       sub: `Using ${formatFileSize(totalSize)} across ${uploadedFiles.length} file${uploadedFiles.length !== 1 ? "s" : ""}.`,
@@ -218,6 +242,7 @@ function Dashboard({ user }: { user: User }) {
           <button className={activeView === "dashboard" ? "active" : ""} onClick={() => setActiveView("dashboard")}>▦ Dashboard</button>
           <button className={activeView === "files" ? "active" : ""} onClick={() => setActiveView("files")}>□ My Files</button>
           <button className={activeView === "recent" ? "active" : ""} onClick={() => setActiveView("recent")}>◷ Recent</button>
+          <button className={activeView === "search" ? "active" : ""} onClick={() => setActiveView("search")}>✦ Search</button>
           <button className={activeView === "storage" ? "active" : ""} onClick={() => setActiveView("storage")}>◎ Storage</button>
         </nav>
 
@@ -379,6 +404,61 @@ function Dashboard({ user }: { user: User }) {
               )}
             </section>
           </>
+        )}
+
+        {/* SEARCH VIEW */}
+        {activeView === "search" && (
+          <section className="search-panel">
+            <div className="search-input-row">
+              <input
+                className="search-main-input"
+                placeholder="Ask a question across all your documents..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && runSearch()}
+                disabled={searchLoading}
+                autoFocus
+              />
+              <button
+                className="search-run-btn"
+                onClick={runSearch}
+                disabled={!searchQuery.trim() || searchLoading}
+              >
+                {searchLoading ? "Searching…" : "Search"}
+              </button>
+            </div>
+
+            {searchLoading && (
+              <div className="search-loading">
+                <div className="chat-bubble assistant chat-loading"><span /><span /><span /></div>
+                <p>Searching your documents…</p>
+              </div>
+            )}
+
+            {searchError && <p className="chat-error">{searchError}</p>}
+
+            {searchResult && (
+              <div className="search-result">
+                <div className="search-answer">{searchResult.answer}</div>
+                {searchResult.sources.length > 0 && (
+                  <div className="search-sources">
+                    <span className="search-sources-label">Sources</span>
+                    {searchResult.sources.map((s) => (
+                      <span key={s.key} className="search-source-chip">{s.fileName}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!searchLoading && !searchResult && !searchError && (
+              <div className="search-empty">
+                <p className="search-empty-title">Search across all your files</p>
+                <p className="search-empty-sub">Ask anything — findings are pulled from your indexed documents using AI.</p>
+                <p className="search-empty-note">New uploads are indexed automatically. Existing files can be re-uploaded to index them.</p>
+              </div>
+            )}
+          </section>
         )}
       </section>
     </main>
