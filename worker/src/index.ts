@@ -7,7 +7,7 @@ export interface Env {
   BUCKET_NAME: string;
   FIREBASE_PROJECT_ID: string;
   SHARE_TOKENS: KVNamespace;
-  GEMINI_API_KEY: string;
+  OPENAI_API_KEY: string;
 }
 
 type ShareRecord = { uid: string; key: string; filename: string };
@@ -41,24 +41,24 @@ function b64urlDecode(s: string): Uint8Array {
 async function verifyFirebaseToken(
   token: string,
   projectId: string
-): Promise<string | null> {
+): Promise<{ uid: string } | { error: string }> {
   try {
     const parts = token.split(".");
-    if (parts.length !== 3) return null;
+    if (parts.length !== 3) return { error: "malformed_token" };
     const [rawHeader, rawPayload, rawSig] = parts;
 
     const header = JSON.parse(atob(rawHeader.replace(/-/g, "+").replace(/_/g, "/")));
     const payload = JSON.parse(atob(rawPayload.replace(/-/g, "+").replace(/_/g, "/")));
 
     const now = Math.floor(Date.now() / 1000);
-    if (payload.exp < now) return null;
-    if (payload.aud !== projectId) return null;
-    if (payload.iss !== `https://securetoken.google.com/${projectId}`) return null;
-    if (!payload.sub) return null;
+    if (payload.exp < now) return { error: "token_expired" };
+    if (payload.aud !== projectId) return { error: `aud_mismatch: token=${payload.aud} expected=${projectId}` };
+    if (payload.iss !== `https://securetoken.google.com/${projectId}`) return { error: "iss_mismatch" };
+    if (!payload.sub) return { error: "no_sub" };
 
     const keys = await getJwks();
     const jwk = keys.find((k) => k.kid === header.kid);
-    if (!jwk) return null;
+    if (!jwk) return { error: "jwk_not_found" };
 
     const publicKey = await crypto.subtle.importKey(
       "jwk",
@@ -75,9 +75,9 @@ async function verifyFirebaseToken(
       new TextEncoder().encode(`${rawHeader}.${rawPayload}`)
     );
 
-    return valid ? (payload.sub as string) : null;
-  } catch {
-    return null;
+    return valid ? { uid: payload.sub as string } : { error: "signature_invalid" };
+  } catch (e) {
+    return { error: `exception: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 
@@ -135,6 +135,8 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   }
   return btoa(binary);
 }
+
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 type GeminiMimeType =
   | "application/pdf"
@@ -201,8 +203,9 @@ export default {
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
     if (!token) return json({ error: "Unauthorized" }, 401);
 
-    const uid = await verifyFirebaseToken(token, env.FIREBASE_PROJECT_ID);
-    if (!uid) return json({ error: "Unauthorized" }, 401);
+    const authResult = await verifyFirebaseToken(token, env.FIREBASE_PROJECT_ID);
+    if ("error" in authResult) return json({ error: "Unauthorized", reason: authResult.error }, 401);
+    const uid = authResult.uid;
 
     // GET /files — list this user's files
     if (request.method === "GET" && pathname === "/files") {
@@ -296,8 +299,12 @@ export default {
       return json({ url: shareUrl, token });
     }
 
-    // POST /chat — { key, message, history } → { reply }
+    // POST /chat — { key, message, history } → { reply }  [powered by gpt-4o-mini]
     if (request.method === "POST" && pathname === "/chat") {
+      if (!env.OPENAI_API_KEY) {
+        return json({ error: "AI features are not configured on this server." }, 503);
+      }
+
       const { key, message, history } = (await request.json()) as {
         key: string;
         message: string;
@@ -308,54 +315,108 @@ export default {
 
       const mediaType = mediaTypeFromKey(key);
       if (!mediaType) {
-        return json(
-          { error: "This file type isn't supported for AI chat. Try a PDF, text file, or image." },
-          422
-        );
+        return json({ error: "Unsupported file type. Try a PDF, text file, CSV, or image." }, 422);
       }
 
       const s3Res = await aws.fetch(s3ObjectUrl(env.BUCKET_NAME, env.AWS_REGION, key));
-      if (!s3Res.ok) return json({ error: "Could not fetch file" }, 502);
+      if (!s3Res.ok) return json({ error: "Could not fetch file from storage." }, 502);
 
       const fileBuffer = await s3Res.arrayBuffer();
-      const base64Data = arrayBufferToBase64(fileBuffer);
-
-      type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
-      type GeminiContent = { role: "user" | "model"; parts: GeminiPart[] };
-
-      const filepart: GeminiPart = { inlineData: { mimeType: mediaType, data: base64Data } };
-      const contents: GeminiContent[] = [];
-
-      if (history.length === 0) {
-        contents.push({ role: "user", parts: [filepart, { text: message }] });
-      } else {
-        contents.push({ role: "user", parts: [filepart, { text: history[0].content }] });
-        for (const turn of history.slice(1)) {
-          contents.push({
-            role: turn.role === "assistant" ? "model" : "user",
-            parts: [{ text: turn.content }],
-          });
-        }
-        contents.push({ role: "user", parts: [{ text: message }] });
+      if (fileBuffer.byteLength > MAX_FILE_BYTES) {
+        return json({ error: "File is too large for AI processing. Maximum size is 20 MB." }, 413);
       }
 
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${env.GEMINI_API_KEY}`;
-      const geminiRes = await fetch(geminiUrl, {
+      // Map the file to the right OpenAI content format:
+      //   text/* → plain text in the message string
+      //   image/* → base64 vision block
+      //   application/pdf → upload via Files API, reference by file_id
+      type TextPart = { type: "text"; text: string };
+      type ImagePart = { type: "image_url"; image_url: { url: string } };
+      type FilePart = { type: "file"; file: { file_id: string } };
+      type ContentPart = TextPart | ImagePart | FilePart;
+      type AnyMsg = { role: "system" | "user" | "assistant"; content: string | ContentPart[] };
+
+      let filePrefix = "";           // prepended to text-file messages
+      let filePart: ContentPart | null = null;  // vision / file-id block
+      let uploadedFileId: string | null = null;
+
+      if (mediaType.startsWith("text/")) {
+        filePrefix = `Document content:\n\n${new TextDecoder().decode(fileBuffer)}\n\n---\n\n`;
+      } else if (mediaType.startsWith("image/")) {
+        filePart = {
+          type: "image_url",
+          image_url: { url: `data:${mediaType};base64,${arrayBufferToBase64(fileBuffer)}` },
+        };
+      } else {
+        // PDF: upload to OpenAI Files API, then reference by file_id
+        const form = new FormData();
+        form.append("file", new Blob([fileBuffer], { type: mediaType }), displayName(key));
+        form.append("purpose", "user_data");
+
+        const uploadRes = await fetch("https://api.openai.com/v1/files", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+          body: form,
+        });
+
+        if (!uploadRes.ok) {
+          const err = (await uploadRes.json()) as { error?: { message: string } };
+          return json({ error: err.error?.message ?? "Failed to upload file for AI processing.", detail: JSON.stringify(err) }, uploadRes.status);
+        }
+
+        const { id } = (await uploadRes.json()) as { id: string };
+        uploadedFileId = id;
+        filePart = { type: "file", file: { file_id: id } };
+      }
+
+      // Returns the content for the first user turn (includes the document).
+      const firstContent = (q: string): string | ContentPart[] =>
+        filePart ? [filePart, { type: "text", text: q }] : `${filePrefix}${q}`;
+
+      const messages: AnyMsg[] = [
+        {
+          role: "system",
+          content: "You are a helpful document assistant. Answer questions about the provided document clearly and concisely.",
+        },
+      ];
+
+      if (history.length === 0) {
+        messages.push({ role: "user", content: firstContent(message) });
+      } else {
+        messages.push({ role: "user", content: firstContent(history[0].content) });
+        for (const turn of history.slice(1)) {
+          messages.push({ role: turn.role === "assistant" ? "assistant" : "user", content: turn.content });
+        }
+        messages.push({ role: "user", content: message });
+      }
+
+      const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents }),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({ model: "gpt-4o-mini", messages }),
       });
 
-      const geminiData = (await geminiRes.json()) as {
-        candidates?: { content: { parts: { text: string }[] } }[];
+      // Clean up the uploaded file regardless of outcome (fire-and-forget)
+      if (uploadedFileId) {
+        fetch(`https://api.openai.com/v1/files/${uploadedFileId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+        }).catch(() => {});
+      }
+
+      const openaiData = (await openaiRes.json()) as {
+        choices?: { message: { content: string } }[];
         error?: { message: string };
       };
 
-      if (!geminiRes.ok) {
-        return json({ error: "AI error", detail: geminiData.error?.message }, geminiRes.status);
+      if (!openaiRes.ok) {
+        return json({ error: openaiData.error?.message ?? "AI service error.", detail: JSON.stringify(openaiData) }, openaiRes.status);
       }
 
-      const reply = geminiData.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+      const reply = openaiData.choices?.[0]?.message?.content ?? "";
       return json({ reply });
     }
 
