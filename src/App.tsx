@@ -9,7 +9,7 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined);
 
   useEffect(() => {
@@ -17,24 +17,13 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }, []);
 
   if (user === undefined) return null;
-  if (!user) return <Navigate to="/login" replace />;
-  return <>{children}</>;
-}
 
-function App() {
   return (
     <Routes>
-      <Route path="/" element={<Landing />} />
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
-      <Route
-        path="/dashboard"
-        element={
-          <ProtectedRoute>
-            <Dashboard />
-          </ProtectedRoute>
-        }
-      />
+      <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <Landing />} />
+      <Route path="/login" element={user ? <Navigate to="/dashboard" replace /> : <Login />} />
+      <Route path="/register" element={user ? <Navigate to="/dashboard" replace /> : <Register />} />
+      <Route path="/dashboard" element={user ? <Dashboard /> : <Navigate to="/login" replace />} />
     </Routes>
   );
 }
