@@ -544,7 +544,11 @@ export default {
         }))
       );
 
-      await env.VAULT_EMBEDDINGS.upsert(vectors);
+      try {
+        await env.VAULT_EMBEDDINGS.upsert(vectors);
+      } catch (e) {
+        return json({ error: `Vectorize upsert failed: ${e instanceof Error ? e.message : String(e)}` }, 502);
+      }
       await env.SHARE_TOKENS.put(`idx_${key}`, String(chunks.length));
 
       return json({ indexed: chunks.length });
@@ -557,21 +561,33 @@ export default {
       const { query } = (await request.json()) as { query: string };
       if (!query?.trim()) return json({ error: "Query is required." }, 400);
 
-      const queryEmbedding = await embedText(query, env.OPENAI_API_KEY);
+      let queryEmbedding: number[];
+      try {
+        queryEmbedding = await embedText(query, env.OPENAI_API_KEY);
+      } catch (e) {
+        return json({ error: `Embedding failed: ${e instanceof Error ? e.message : String(e)}` }, 502);
+      }
 
-      const results = await env.VAULT_EMBEDDINGS.query(queryEmbedding, {
-        topK: 6,
-        filter: { uid },
-        returnMetadata: "all",
-      });
+      let results: Awaited<ReturnType<typeof env.VAULT_EMBEDDINGS.query>>;
+      try {
+        results = await env.VAULT_EMBEDDINGS.query(queryEmbedding, {
+          topK: 10,
+          returnMetadata: "all",
+          filter: { uid },
+        });
+      } catch (e) {
+        return json({ error: `Vector search failed: ${e instanceof Error ? e.message : String(e)}` }, 502);
+      }
 
       type ChunkMeta = { uid: string; key: string; fileName: string; text: string };
 
-      if (!results.matches?.length) {
-        return json({ answer: "I couldn't find any relevant content in your documents for that question.", sources: [] });
+      const userMatches = (results.matches ?? []).slice(0, 6);
+
+      if (!userMatches.length) {
+        return json({ answer: "I couldn't find any relevant content in your documents for that question. Make sure you've uploaded and indexed some files first.", sources: [] });
       }
 
-      const chunks = results.matches.map((m) => m.metadata as ChunkMeta);
+      const chunks = userMatches.map((m) => m.metadata as ChunkMeta);
       const context = chunks.map((c, i) => `[${i + 1}] From "${c.fileName}":\n${c.text}`).join("\n\n");
       const sources = [...new Map(chunks.map((c) => [c.key, { key: c.key, fileName: c.fileName }])).values()];
 

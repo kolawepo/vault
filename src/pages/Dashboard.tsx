@@ -267,7 +267,13 @@ function Dashboard({ user }: { user: User }) {
             <h2>{topbarText[activeView].heading}</h2>
             <p>{topbarText[activeView].sub}</p>
           </div>
-          <input className="vault-search" placeholder="Search files, folders..." />
+          {activeView !== "search" && (
+            <input
+              className="vault-search"
+              placeholder="Search files, folders..."
+              onFocus={() => setActiveView("search")}
+            />
+          )}
         </header>
 
         {/* DASHBOARD VIEW */}
@@ -409,24 +415,19 @@ function Dashboard({ user }: { user: User }) {
         {/* SEARCH VIEW */}
         {activeView === "search" && (
           <section className="search-panel">
-            <div className="search-input-row">
+            <form className="search-input-row" onSubmit={(e) => { e.preventDefault(); runSearch(); }}>
               <input
                 className="search-main-input"
+                type="text"
                 placeholder="Ask a question across all your documents..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && runSearch()}
-                disabled={searchLoading}
                 autoFocus
               />
-              <button
-                className="search-run-btn"
-                onClick={runSearch}
-                disabled={!searchQuery.trim() || searchLoading}
-              >
+              <button type="submit" className="search-run-btn">
                 {searchLoading ? "Searching…" : "Search"}
               </button>
-            </div>
+            </form>
 
             {searchLoading && (
               <div className="search-loading">
@@ -455,7 +456,6 @@ function Dashboard({ user }: { user: User }) {
               <div className="search-empty">
                 <p className="search-empty-title">Search across all your files</p>
                 <p className="search-empty-sub">Ask anything — findings are pulled from your indexed documents using AI.</p>
-                <p className="search-empty-note">New uploads are indexed automatically. Existing files can be re-uploaded to index them.</p>
               </div>
             )}
           </section>

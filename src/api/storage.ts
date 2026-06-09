@@ -45,8 +45,7 @@ export async function uploadFile(file: File): Promise<void> {
   });
   if (!upload.ok) throw new Error("Upload to S3 failed");
 
-  // Fire-and-forget: index for RAG search (don't block the upload response)
-  indexDocument(key).catch(console.error);
+  indexDocument(key).catch((err) => console.error("[vault] indexing failed:", err));
 }
 
 async function indexDocument(key: string): Promise<void> {
